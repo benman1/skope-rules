@@ -4,6 +4,8 @@ from skrules import SkopeRules
 
 def test_regression_works():
     X, y = load_diabetes(return_X_y=True)
+    feature_names = ['sepal_length', 'sepal_width',
+                     'petal_length', 'petal_width']
     clf = SkopeRules(
         regression=True,
         max_depth_duplication=2,
@@ -12,8 +14,6 @@ def test_regression_works():
         recall_min=0.1,
         feature_names=feature_names
     )
-    clf.fit(X, y == idx)
+    clf.fit(X, y)
     rules = clf.rules_[0:3]
     assert len(rules) > 0
-
-
