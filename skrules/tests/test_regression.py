@@ -1,4 +1,3 @@
-import numpy as np
 from sklearn.datasets import load_diabetes
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
@@ -53,12 +52,21 @@ def test_can_predict():
 
 
 def test_performance_not_deteriorate():
+    '''Compare the model performance to baselines.
+
+    It's a bit unclear what to compare against since performance
+    varies widely across models (in mse; vanilla settings):
+    decision tree regressor: 6946
+    random forest regressor: 2970
+    linear model: 2820
+    '''
     clf = SkopeRules(
         regression=True,
-        max_depth_duplication=2,
-        n_estimators=300,
-        precision_min=0.0,
-        recall_min=0.0,
+        max_depth_duplication=None,
+        max_depth=X.shape[1] // 3,
+        n_estimators=850,
+        precision_min=0.,
+        recall_min=.0,
         feature_names=feature_names
     )
     X_train, X_test, y_train, y_test = train_test_split(
@@ -66,7 +74,6 @@ def test_performance_not_deteriorate():
     )
     clf.fit(X_train, y_train)
     y_pred = clf.predict(X_test)
-    print(np.column_stack([y_test, y_pred]))
     mse = mean_squared_error(y_test, y_pred)
     # comparing to a baseline from linear regression:
-    assert mse < 2548.07
+    assert mse < 2820

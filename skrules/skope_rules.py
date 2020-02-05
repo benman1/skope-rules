@@ -496,12 +496,13 @@ class SkopeRules(BaseEstimator):
         w_sum = np.zeros(X.shape[0])
         for (r, w) in selected_rules:
             index = list(df.query(r).index)
-            weight = np.exp(w[0])
+            # softmax or simple averaging:
+            weight = 1.0  # np.exp(w[0])
             scores[index] += weight * w[2]
             w_sum[index] += weight
 
         if self.regression:
-            # softmax
+            # if we don't know anything, set to mean:
             scores[w_sum == 0.0] = self.means
             w_sum[w_sum == 0.0] = 1.0
             return scores / w_sum
