@@ -209,6 +209,7 @@ class SkopeRules(BaseEstimator):
 
         if self.regression:
             self.classes_ = None
+            self.means = y.mean(axis=0)
         else:
             self.classes_ = np.unique(y)
             n_classes = len(self.classes_)
@@ -417,7 +418,7 @@ class SkopeRules(BaseEstimator):
         if self.max_depth_duplication is not None:
             self.rules_ = self.deduplicate(self.rules_)
 
-        self.rules_ = sorted(self.rules_, key=lambda x: - self.hmean(x))
+        self.rules_ = sorted(self.rules_, key=lambda x: - self.f1_score(x))
         self.rules_without_feature_names_ = self.rules_
 
         # Replace generic feature names by real feature names
@@ -450,7 +451,10 @@ class SkopeRules(BaseEstimator):
             be considered as an outlier according to the selected rules.
         """
 
-        return np.array((self.decision_function(X) > 0), dtype=int)
+        if not self.regression:
+            return np.array((self.decision_function(X) > 0), dtype=int)
+        else:
+            return np.array((self.decision_function(X)), dtype=float)
 
     def decision_function(self, X):
         """Average anomaly score of X of the base classifiers (rules).
@@ -489,10 +493,20 @@ class SkopeRules(BaseEstimator):
         selected_rules = self.rules_without_feature_names_
 
         scores = np.zeros(X.shape[0])
+        w_sum = np.zeros(X.shape[0])
         for (r, w) in selected_rules:
-            scores[list(df.query(r).index)] += w[0] * w[2]
+            index = list(df.query(r).index)
+            weight = np.exp(w[0])
+            scores[index] += weight * w[2]
+            w_sum[index] += weight
 
-        return scores
+        if self.regression:
+            # softmax
+            scores[w_sum == 0.0] = self.means
+            w_sum[w_sum == 0.0] = 1.0
+            return scores / w_sum
+        else:
+            return scores
 
     def rules_vote(self, X):
         """Score representing a vote of the base classifiers (rules).
@@ -693,7 +707,7 @@ class SkopeRules(BaseEstimator):
             ))
             # ... and the prediction to be close to the actual values
             # z-test
-
+            # (y_detected.std() / np.sqrt(y_detected.shape[0]))
             recall = float(
                 1 - np.clip(
                     np.abs(
@@ -706,7 +720,7 @@ class SkopeRules(BaseEstimator):
             return precision, recall
 
     def deduplicate(self, rules):
-        return [max(rules_set, key=self.hmean)
+        return [max(rules_set, key=self.f1_score)
                 for rules_set in self._find_similar_rulesets(rules)]
 
     def _find_similar_rulesets(self, rules):
@@ -772,10 +786,9 @@ class SkopeRules(BaseEstimator):
         return leaves
 
     @staticmethod
-    def hmean(x):
+    def f1_score(x):
         '''calculate the harmonic mean given a tuple (rule, (score1, score2)).
-        This is the f1 score in the case
-        of precision and recall
+        This is the f1 score of precision and recall
         '''
         return 2 * x[1][0] * x[1][1] / \
             (x[1][0] + x[1][1]) if (x[1][0] + x[1][1]) > 0 else 0

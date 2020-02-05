@@ -1,3 +1,4 @@
+import numpy as np
 from sklearn.datasets import load_diabetes
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
@@ -55,14 +56,17 @@ def test_performance_not_deteriorate():
     clf = SkopeRules(
         regression=True,
         max_depth_duplication=2,
-        n_estimators=30,
-        precision_min=0.20,
-        recall_min=0.20,
+        n_estimators=300,
+        precision_min=0.0,
+        recall_min=0.0,
         feature_names=feature_names
     )
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.33, random_state=42
     )
     clf.fit(X_train, y_train)
-    mse = mean_squared_error(y_test, clf.predict(X_test))
-    assert mse < 2548.07  # that's what you get in linear regression
+    y_pred = clf.predict(X_test)
+    print(np.column_stack([y_test, y_pred]))
+    mse = mean_squared_error(y_test, y_pred)
+    # comparing to a baseline from linear regression:
+    assert mse < 2548.07
