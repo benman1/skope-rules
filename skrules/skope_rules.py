@@ -1,6 +1,7 @@
 from collections import Counter, Iterable
 import numbers
 from warnings import warn
+import sys
 import numpy as np
 import pandas
 
@@ -347,26 +348,39 @@ class SkopeRules(BaseEstimator):
                                                 self.estimators_samples_,
                                                 self.estimators_features_):
 
-            # Create mask for OOB samples
-            mask = ~samples
-            if sum(mask) == 0:
-                warn("OOB evaluation not possible: doing it in-bag."
-                     " Performance evaluation is likely to be wrong"
-                     " (overfitting) and selected rules are likely to"
-                     " not perform well! Please use max_samples < 1.")
-                mask = samples
-            rules_from_tree = self._tree_to_rules(
-                estimator, np.array(self.feature_names_)[features]
-            )
+            if not self.regression:
+                # Create mask for OOB samples
+                mask = ~samples
+                if sum(mask) == 0:
+                    warn("OOB evaluation not possible: doing it in-bag."
+                         " Performance evaluation is likely to be wrong"
+                         " (overfitting) and selected rules are likely to"
+                         " not perform well! Please use max_samples < 1.")
+                    mask = samples
+                rules_from_tree = self._tree_to_rules(
+                    estimator, np.array(self.feature_names_)[features]
+                )
+                # XXX todo: idem without dataframe
+                X_oob = pandas.DataFrame((X[mask, :])[:, features],
+                                         columns=np.array(
+                                             self.feature_names_)[features])
+                y_mask = y[mask]
 
-            # XXX todo: idem without dataframe
-            X_oob = pandas.DataFrame((X[mask, :])[:, features],
-                                     columns=np.array(
-                                         self.feature_names_)[features])
+            else:  # self.regression:
+                X_oob = pandas.DataFrame(
+                    (X)[:, features],
+                    columns=np.array(
+                        self.feature_names_)[features]
+                )
+                y_mask = y
+                rules_from_tree = self._tree_to_rules(
+                    estimator, np.array(self.feature_names_)[features]
+                )
 
             if X_oob.shape[1] > 1:  # otherwise pandas bug (cf. issue #16363)
-                y_oob = y[mask]
-                y_oob = np.array((y_oob != 0))
+                y_oob = y_mask
+                if not self.regression:
+                    y_oob = np.array((y_oob != 0))
 
                 # Add OOB performances to rules:
                 rules_from_tree = [(r, self._eval_rule_perf(*r, X_oob, y_oob))
@@ -475,8 +489,8 @@ class SkopeRules(BaseEstimator):
         selected_rules = self.rules_without_feature_names_
 
         scores = np.zeros(X.shape[0])
-        for (r, w, pred) in selected_rules:
-            scores[list(df.query(r).index)] += w[0] * pred
+        for (r, w) in selected_rules:
+            scores[list(df.query(r).index)] += w[0] * w[2]
 
         return scores
 
@@ -672,14 +686,23 @@ class SkopeRules(BaseEstimator):
         else:
             # we expect the rule to narrow down on similar scores
             precision = float(1 - np.clip(
-                y[detected_index].std() / y.std(),
+                y_detected.std() / (
+                    y.std() + sys.float_info.epsilon
+                ),
                 0.0, 1.0
             ))
             # ... and the prediction to be close to the actual values
-            recall = float(np.clip(
-                1 - np.sqrt(np.square(np.mean(y) - pred)) / np.mean(y),
-                0.0, 1.0
-            ))
+            # z-test
+
+            recall = float(
+                1 - np.clip(
+                    np.abs(
+                        (pred - y_detected.mean())
+                        / y_detected.std()
+                    ),
+                    0, 1
+                )
+            )
             return precision, recall
 
     def deduplicate(self, rules):
