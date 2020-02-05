@@ -200,25 +200,33 @@ class SkopeRules(BaseEstimator):
         check_classification_targets(y)
         self.n_features_ = X.shape[1]
 
-        self.classes_ = np.unique(y)
-        n_classes = len(self.classes_)
-
-        if n_classes < 2:
-            raise ValueError("This method needs samples of at least 2 classes"
-                             " in the data, but the data contains only one"
-                             " class: %r" % self.classes_[0])
-
         if not isinstance(self.max_depth_duplication, int) \
                 and self.max_depth_duplication is not None:
-            raise ValueError("max_depth_duplication should be an integer"
-                             )
-        if not set(self.classes_) == set([0, 1]):
-            warn("Found labels %s. This method assumes target class to be"
-                 " labeled as 1 and normal data to be labeled as 0. Any label"
-                 " different from 0 will be considered as being from the"
-                 " target class."
-                 % set(self.classes_))
-            y = (y > 0)
+            raise ValueError(
+                "max_depth_duplication should be an integer"
+            )
+
+        if self.regression:
+            self.classes_ = None
+        else:
+            self.classes_ = np.unique(y)
+            n_classes = len(self.classes_)
+
+            if n_classes < 2:
+                raise ValueError(
+                    "This method needs samples of at least 2 classes"
+                    " in the data, but the data contains only one"
+                    " class: %r" % self.classes_[0]
+                )
+
+            if not set(self.classes_) == set([0, 1]):
+                warn(
+                    "Found labels %s. This method assumes target class to be"
+                    " labeled as 1 and normal data to be labeled as 0. Any"
+                    " label different from 0 will be considered as being from"
+                    " the target class." % set(self.classes_)
+                )
+                y = (y > 0)
 
         # ensure that max_samples is in [1, n_samples]:
         n_samples = X.shape[0]
