@@ -4,14 +4,15 @@ from skrules import SkopeRules
 
 def test_regression_works():
     X, y = load_diabetes(return_X_y=True)
-    feature_names = ['sepal_length', 'sepal_width',
-                     'petal_length', 'petal_width']
+    feature_names = [
+        'age', 'sex', 'bmi', 'bp', 's1', 's2', 's3', 's4', 's5', 's6'
+    ]
     clf = SkopeRules(
         regression=True,
         max_depth_duplication=2,
         n_estimators=30,
-        precision_min=0.3,
-        recall_min=0.1,
+        precision_min=1.3,
+        recall_min=1.1,
         feature_names=feature_names
     )
     clf.fit(X, y)
