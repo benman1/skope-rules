@@ -1,8 +1,8 @@
-import numpy as np
 from collections import Counter, Iterable
-import pandas
 import numbers
 from warnings import warn
+import numpy as np
+import pandas
 
 from sklearn.base import BaseEstimator
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
@@ -139,6 +139,7 @@ class SkopeRules(BaseEstimator):
 
     def __init__(self,
                  feature_names=None,
+                 regression=False,
                  precision_min=0.5,
                  recall_min=0.01,
                  n_estimators=10,
@@ -156,6 +157,7 @@ class SkopeRules(BaseEstimator):
         self.precision_min = precision_min
         self.recall_min = recall_min
         self.feature_names = feature_names
+        self.regression = regression
         self.n_estimators = n_estimators
         self.max_samples = max_samples
         self.max_samples_features = max_samples_features
@@ -226,7 +228,7 @@ class SkopeRules(BaseEstimator):
                              'Valid choices are: "auto", int or'
                              'float' % self.max_samples)
 
-        elif isinstance(self.max_samples, INTEGER_TYPES):
+        if isinstance(self.max_samples, INTEGER_TYPES):
             if self.max_samples > n_samples:
                 warn("max_samples (%s) is greater than the "
                      "total number of samples (%s). max_samples "
@@ -266,22 +268,27 @@ class SkopeRules(BaseEstimator):
             if isinstance(self.max_depth, Iterable) else [self.max_depth]
 
         for max_depth in self._max_depths:
-            bagging_clf = BaggingClassifier(
-                base_estimator=DecisionTreeClassifier(
-                    max_depth=max_depth,
-                    max_features=self.max_features,
-                    min_samples_split=self.min_samples_split),
-                n_estimators=self.n_estimators,
-                max_samples=self.max_samples_,
-                max_features=self.max_samples_features,
-                bootstrap=self.bootstrap,
-                bootstrap_features=self.bootstrap_features,
-                # oob_score=... XXX may be added
-                # if selection on tree perf needed.
-                # warm_start=... XXX may be added to increase computation perf.
-                n_jobs=self.n_jobs,
-                random_state=self.random_state,
-                verbose=self.verbose)
+            if not self.regression:
+                # do classification models;
+                # otherwise, just leave classification models as an empty list
+                bagging_clf = BaggingClassifier(
+                    base_estimator=DecisionTreeClassifier(
+                        max_depth=max_depth,
+                        max_features=self.max_features,
+                        min_samples_split=self.min_samples_split),
+                    n_estimators=self.n_estimators,
+                    max_samples=self.max_samples_,
+                    max_features=self.max_samples_features,
+                    bootstrap=self.bootstrap,
+                    bootstrap_features=self.bootstrap_features,
+                    # oob_score=... XXX may be added
+                    # if selection on tree perf needed.
+                    # warm_start=... XXX may be added to
+                    # increase computation perf.
+                    n_jobs=self.n_jobs,
+                    random_state=self.random_state,
+                    verbose=self.verbose)
+                clfs.append(bagging_clf)
 
             bagging_reg = BaggingRegressor(
                 base_estimator=DecisionTreeRegressor(
@@ -300,11 +307,10 @@ class SkopeRules(BaseEstimator):
                 random_state=self.random_state,
                 verbose=self.verbose)
 
-            clfs.append(bagging_clf)
             regs.append(bagging_reg)
 
         # define regression target:
-        if sample_weight is not None:
+        if sample_weight is not None and not self.regression:
             if sample_weight is not None:
                 sample_weight = check_array(sample_weight, ensure_2d=False)
             weights = sample_weight - sample_weight.min()
@@ -342,7 +348,8 @@ class SkopeRules(BaseEstimator):
                      " not perform well! Please use max_samples < 1.")
                 mask = samples
             rules_from_tree = self._tree_to_rules(
-                estimator, np.array(self.feature_names_)[features])
+                estimator, np.array(self.feature_names_)[features]
+            )
 
             # XXX todo: idem without dataframe
             X_oob = pandas.DataFrame((X[mask, :])[:, features],
@@ -354,7 +361,7 @@ class SkopeRules(BaseEstimator):
                 y_oob = np.array((y_oob != 0))
 
                 # Add OOB performances to rules:
-                rules_from_tree = [(r, self._eval_rule_perf(r, X_oob, y_oob))
+                rules_from_tree = [(r, self._eval_rule_perf(*r, X_oob, y_oob))
                                    for r in set(rules_from_tree)]
                 rules_ += rules_from_tree
 
@@ -362,22 +369,24 @@ class SkopeRules(BaseEstimator):
         rules_ = [
             tuple(rule)
             for rule in
-            [Rule(r, args=args) for r, args in rules_]]
+            [Rule(r, args=args, pred=pred) for (r, pred), args in rules_]]
 
-        # keep only rules verifying precision_min and recall_min:
-        for rule, score in rules_:
+        # Please note: this loop changes the rule representation from
+        # a list of tuples (rule, (precision, recall), pred) to
+        # a list of tuples (rule, (precision, recall, pred)).
+        for rule, score, pred in rules_:
+            # keep only rules verifying precision_min and recall_min:
             if score[0] >= self.precision_min and score[1] >= self.recall_min:
-                if rule in self.rules_:
-                    # update the score to the new mean
+                if rule in self.rules_ and not self.regression:
+                    # update the scores to the new mean
                     c = self.rules_[rule][2] + 1
                     b = self.rules_[rule][1] + 1. / c * (
                         score[1] - self.rules_[rule][1])
                     a = self.rules_[rule][0] + 1. / c * (
                         score[0] - self.rules_[rule][0])
-
                     self.rules_[rule] = (a, b, c)
                 else:
-                    self.rules_[rule] = (score[0], score[1], 1)
+                    self.rules_[rule] = (score[0], score[1], pred)
 
         self.rules_ = sorted(self.rules_.items(),
                              key=lambda x: (x[1][0], x[1][1]), reverse=True)
@@ -386,12 +395,20 @@ class SkopeRules(BaseEstimator):
         if self.max_depth_duplication is not None:
             self.rules_ = self.deduplicate(self.rules_)
 
-        self.rules_ = sorted(self.rules_, key=lambda x: - self.f1_score(x))
+        self.rules_ = sorted(self.rules_, key=lambda x: - self.hmean(x))
         self.rules_without_feature_names_ = self.rules_
 
         # Replace generic feature names by real feature names
-        self.rules_ = [(replace_feature_name(rule, self.feature_dict_), perf)
-                       for rule, perf in self.rules_]
+        # We change back the rule representation to
+        # (rule, (precision, recall), pred).
+        self.rules_ = [
+            (
+                replace_feature_name(rule, self.feature_dict_),
+                perf[:-1],
+                perf[-1]
+            )
+            for rule, perf in self.rules_
+        ]
 
         return self
 
@@ -450,8 +467,8 @@ class SkopeRules(BaseEstimator):
         selected_rules = self.rules_without_feature_names_
 
         scores = np.zeros(X.shape[0])
-        for (r, w) in selected_rules:
-            scores[list(df.query(r).index)] += w[0]
+        for (r, w, pred) in selected_rules:
+            scores[list(df.query(r).index)] += w[0] * pred
 
         return scores
 
@@ -459,7 +476,9 @@ class SkopeRules(BaseEstimator):
         """Score representing a vote of the base classifiers (rules).
 
         The score of an input sample is computed as the sum of the binary
-        rules outputs: a score of k means than k rules have voted positively.
+        rules outputs. In the case of classification, a score of k means
+        that k rules have voted positively. In the case of regression this
+        is ill-defined.
 
         Parameters
         ----------
@@ -474,6 +493,9 @@ class SkopeRules(BaseEstimator):
             null scores represent inliers.
 
         """
+        if self.regression:
+            raise ValueError('Not implemented for regression!')
+
         # Check if fit had been called
         check_is_fitted(self, ['rules_', 'estimators_', 'estimators_samples_',
                                'max_samples_'])
@@ -491,7 +513,7 @@ class SkopeRules(BaseEstimator):
         selected_rules = self.rules_
 
         scores = np.zeros(X.shape[0])
-        for (r, _) in selected_rules:
+        for (r, _, _) in selected_rules:
             scores[list(df.query(r).index)] += 1
 
         return scores
@@ -503,6 +525,8 @@ class SkopeRules(BaseEstimator):
         If there are n rules, ordered by increasing OOB precision, a score of k
         means than the kth rule has voted positively, but not the (k-1) first
         rules.
+
+        This is not implemented for regression.
 
         Parameters
         ----------
@@ -517,6 +541,10 @@ class SkopeRules(BaseEstimator):
 
         """
         # Check if fit had been called
+
+        if self.regression:
+            raise ValueError('Not implemented for regression!')
+
         check_is_fitted(self, ['rules_', 'estimators_', 'estimators_samples_',
                                'max_samples_'])
 
@@ -589,6 +617,8 @@ class SkopeRules(BaseEstimator):
         rules = []
 
         def recurse(node, base_name):
+            '''recursively obtains rules with predictions
+            '''
             if tree_.feature[node] != _tree.TREE_UNDEFINED:
                 name = feature_name[node]
                 symbol = '<='
@@ -602,8 +632,12 @@ class SkopeRules(BaseEstimator):
                 recurse(tree_.children_right[node], text)
             else:
                 rule = str.join(' and ', base_name)
-                rule = (rule if rule != ''
-                        else ' == '.join([feature_names[0]] * 2))
+                # a rule is a tuple of antecedent and consequence
+                rule = (
+                    rule if rule != ''
+                    else ' == '.join([feature_names[0]] * 2),
+                    float(tree_.value[node][0][0])
+                )
                 # a rule selecting all is set to "c0==c0"
                 rules.append(rule)
 
@@ -611,19 +645,37 @@ class SkopeRules(BaseEstimator):
 
         return rules if len(rules) > 0 else 'True'
 
-    def _eval_rule_perf(self, rule, X, y):
+    def _eval_rule_perf(self, rule, pred, X, y):
+        '''calculates the precision and recall of rules
+
+        We invent corresponding measures for the regression case.
+        '''
         detected_index = list(X.query(rule).index)
         if len(detected_index) <= 1:
             return (0, 0)
         y_detected = y[detected_index]
-        true_pos = y_detected[y_detected > 0].sum()
-        if true_pos == 0:
-            return (0, 0)
-        pos = y[y > 0].sum()
-        return y_detected.mean(), float(true_pos) / pos
+
+        if not self.regression:
+            true_pos = y_detected[y_detected > 0].sum()
+            if true_pos == 0:
+                return (0, 0)
+            pos = y[y > 0].sum()
+            return y_detected.mean(), float(true_pos) / pos
+        else:
+            # we expect the rule to narrow down on similar scores
+            precision = float(1 - np.clip(
+                y[detected_index].std() / y.std(),
+                0.0, 1.0
+            ))
+            # ... and the prediction to be close to the actual values
+            recall = float(np.clip(
+                1 - np.sqrt(np.square(np.mean(y) - pred)) / np.mean(y),
+                0.0, 1.0
+            ))
+            return precision, recall
 
     def deduplicate(self, rules):
-        return [max(rules_set, key=self.f1_score)
+        return [max(rules_set, key=self.hmean)
                 for rules_set in self._find_similar_rulesets(rules)]
 
     def _find_similar_rulesets(self, rules):
@@ -648,7 +700,7 @@ class SkopeRules(BaseEstimator):
             if depth == 0:
                 return rules
 
-            rulelist = [rule.split(' and ') for rule, score in rules]
+            rulelist = [rule[0].split(' and ') for rule in rules]
             terms = [t.split(' ')[0] for term in rulelist for t in term]
             counter = Counter(terms)
             # Drop exception list
@@ -662,9 +714,9 @@ class SkopeRules(BaseEstimator):
             # Proceed to split
             rules_splitted = [[], [], []]
             for rule in rules:
-                if (most_represented_term + ' <=') in rule[0]:
+                if most_represented_term + ' <=' in rule[0]:
                     rules_splitted[0].append(rule)
-                elif (most_represented_term + ' >') in rule[0]:
+                elif most_represented_term + ' >' in rule[0]:
                     rules_splitted[1].append(rule)
                 else:
                     rules_splitted[2].append(rule)
@@ -688,6 +740,11 @@ class SkopeRules(BaseEstimator):
         breadth_first_search(res, leaves=leaves)
         return leaves
 
-    def f1_score(self, x):
+    @staticmethod
+    def hmean(x):
+        '''calculate the harmonic mean given a tuple (rule, (score1, score2)).
+        This is the f1 score in the case
+        of precision and recall
+        '''
         return 2 * x[1][0] * x[1][1] / \
-               (x[1][0] + x[1][1]) if (x[1][0] + x[1][1]) > 0 else 0
+            (x[1][0] + x[1][1]) if (x[1][0] + x[1][1]) > 0 else 0

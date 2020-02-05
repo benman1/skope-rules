@@ -25,9 +25,10 @@ class Rule:
         but it takes part of the output when the rule is converted to an array.
     """
 
-    def __init__(self, rule, args=None):
+    def __init__(self, rule, args=None, pred=None):
         self.rule = rule
         self.args = args
+        self.pred = pred
         self.terms = [t.split(' ') for t in self.rule.split(' and ')]
         self.agg_dict = {}
         self.factorize()
@@ -62,6 +63,7 @@ class Rule:
     def __iter__(self):
         yield str(self)
         yield self.args
+        yield self.pred
 
     def __repr__(self):
         return ' and '.join([' '.join(
